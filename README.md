@@ -46,7 +46,181 @@ UBS_BUY_PRICE_PATH=data.prices.buy
 UBS_BUYBACK_PRICE_PATH=data.prices.buyback
 ```
 
-When a brand does not expose a stable authorized JSON API, current prices remain editable manually. This avoids coupling the application to brittle HTML scraping or bypassing a provider's terms.
+Creating or updating a holding retrieves its current prices from the configured provider. Unsupported brands or weights return an error rather than saving an incorrect price.
+
+## Production deployment
+
+The following reference setup uses one Ubuntu server, systemd for the Go API, and Nginx for HTTPS, reverse proxying, and Vue static files. Replace `app.example.com` and `api.example.com` with your domains.
+
+### 1. Server requirements
+
+Install Git, Nginx, a C compiler for SQLite, Go 1.23+, Node 20+, npm, and Certbot:
+
+```bash
+sudo apt update
+sudo apt install -y git nginx build-essential sqlite3 certbot python3-certbot-nginx
+```
+
+Install current Go and Node releases from their official distribution channels if the Ubuntu packages are older than the required versions.
+
+Create a dedicated service user and application directories:
+
+```bash
+sudo useradd --system --home /opt/aurum --shell /usr/sbin/nologin aurum
+sudo mkdir -p /opt/aurum /var/lib/aurum
+sudo chown -R aurum:aurum /opt/aurum /var/lib/aurum
+```
+
+Clone or upload this repository to `/opt/aurum`.
+
+Before configuring HTTPS, create DNS `A`/`AAAA` records for `app.example.com` and `api.example.com` pointing to the server and wait for them to resolve.
+
+### 2. Deploy the backend
+
+Build the Go binary on the server:
+
+```bash
+cd /opt/aurum/backend
+CGO_ENABLED=1 go build -o aurum-api ./cmd/server
+sudo chown aurum:aurum aurum-api
+sudo chmod 755 aurum-api
+```
+
+Create `/opt/aurum/backend/.env`:
+
+```env
+PORT=8080
+DATABASE_PATH=/var/lib/aurum/precious-metals.db
+JWT_SECRET=replace-with-a-long-random-production-secret
+ACCESS_TOKEN_TTL=15m
+REFRESH_TOKEN_TTL=168h
+ALLOWED_ORIGIN=https://app.example.com
+GALERI24_PRICE_URL=https://logam-mulia-api.iamutaki.workers.dev/api/prices/galeri24
+```
+
+Generate `JWT_SECRET` with a password generator or `openssl rand -base64 48`. Do not commit the production `.env` file.
+
+Create `/etc/systemd/system/aurum-api.service`:
+
+```ini
+[Unit]
+Description=Aurum Ledger API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum
+Group=aurum
+WorkingDirectory=/opt/aurum/backend
+EnvironmentFile=/opt/aurum/backend/.env
+ExecStart=/opt/aurum/backend/aurum-api
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Start the API:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aurum-api
+sudo systemctl status aurum-api
+curl http://127.0.0.1:8080/health
+```
+
+Only Nginx needs access to port `8080`; do not expose that port publicly.
+
+### 3. Deploy the frontend
+
+The API URL is embedded at build time. Create `/opt/aurum/frontend/.env.production`:
+
+```env
+VITE_API_URL=https://api.example.com/api
+```
+
+Install dependencies and build the production files:
+
+```bash
+cd /opt/aurum/frontend
+npm ci
+npm run build
+sudo mkdir -p /var/www/aurum
+sudo cp -R dist/. /var/www/aurum/
+sudo chown -R www-data:www-data /var/www/aurum
+```
+
+### 4. Configure Nginx
+
+Create `/etc/nginx/sites-available/aurum`:
+
+```nginx
+server {
+    listen 80;
+    server_name app.example.com;
+
+    root /var/www/aurum;
+    index index.html;
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+
+    location = /sw.js {
+        add_header Cache-Control "no-cache";
+    }
+}
+
+server {
+    listen 80;
+    server_name api.example.com;
+
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable the site and HTTPS:
+
+```bash
+sudo ln -s /etc/nginx/sites-available/aurum /etc/nginx/sites-enabled/aurum
+sudo nginx -t
+sudo systemctl reload nginx
+sudo certbot --nginx -d app.example.com -d api.example.com
+```
+
+HTTPS is required for production PWA installation and service workers. Confirm both `https://app.example.com` and `https://api.example.com/health` work after Certbot finishes.
+
+### 5. Updating production
+
+After pulling a new release, rebuild and restart the backend:
+
+```bash
+cd /opt/aurum/backend
+CGO_ENABLED=1 go build -o aurum-api ./cmd/server
+sudo systemctl restart aurum-api
+```
+
+Rebuild and publish the frontend:
+
+```bash
+cd /opt/aurum/frontend
+npm ci
+npm run build
+sudo cp -R dist/. /var/www/aurum/
+```
+
+Back up `/var/lib/aurum/precious-metals.db` regularly. For a consistent live SQLite backup, use `sqlite3 /var/lib/aurum/precious-metals.db ".backup '/backup/precious-metals.db'"` instead of copying the file while writes are occurring.
 
 ## API routes
 
