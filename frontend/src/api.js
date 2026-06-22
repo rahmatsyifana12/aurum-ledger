@@ -1,17 +1,27 @@
+import { reactive } from 'vue'
+
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8080/api'
 const ACCESS_KEY = 'aurum_access_token'
 const REFRESH_KEY = 'aurum_refresh_token'
 let refreshPromise = null
+const tokens = reactive({
+  access: localStorage.getItem(ACCESS_KEY),
+  refresh: localStorage.getItem(REFRESH_KEY)
+})
 
 export const session = {
-  get access() { return localStorage.getItem(ACCESS_KEY) },
-  get refresh() { return localStorage.getItem(REFRESH_KEY) },
+  get access() { return tokens.access },
+  get refresh() { return tokens.refresh },
   get authenticated() { return Boolean(this.refresh) },
   save(data) {
+    tokens.access = data.access_token
+    tokens.refresh = data.refresh_token
     localStorage.setItem(ACCESS_KEY, data.access_token)
     localStorage.setItem(REFRESH_KEY, data.refresh_token)
   },
   clear() {
+    tokens.access = null
+    tokens.refresh = null
     localStorage.removeItem(ACCESS_KEY)
     localStorage.removeItem(REFRESH_KEY)
   }
@@ -63,4 +73,3 @@ export async function logout() {
     session.clear()
   }
 }
-

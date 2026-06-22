@@ -20,6 +20,9 @@ func Open(path string) (*sql.DB, error) {
 	if err = migratePreciousMetalType(db); err != nil {
 		return nil, err
 	}
+	if err = migratePreciousMetalCode(db); err != nil {
+		return nil, err
+	}
 	return db, nil
 }
 
@@ -51,6 +54,33 @@ func migratePreciousMetalType(db *sql.DB) error {
 	return err
 }
 
+func migratePreciousMetalCode(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(precious_metals)`)
+	if err != nil {
+		return err
+	}
+	hasCode := false
+	for rows.Next() {
+		var cid, notNull, primaryKey int
+		var name, columnType string
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		hasCode = hasCode || name == "code"
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	if !hasCode {
+		_, err = db.Exec(`ALTER TABLE precious_metals ADD COLUMN code TEXT`)
+	}
+	return err
+}
+
 const schema = `
 CREATE TABLE IF NOT EXISTS users (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,6 +101,7 @@ CREATE TABLE IF NOT EXISTS precious_metals (
  id INTEGER PRIMARY KEY AUTOINCREMENT,
  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
  type TEXT NOT NULL,
+ code TEXT,
  brand TEXT NOT NULL,
  bought_price REAL NOT NULL CHECK (bought_price >= 0),
  buy_price REAL NOT NULL DEFAULT 0 CHECK (buy_price >= 0),

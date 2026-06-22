@@ -33,6 +33,7 @@ type userResponse struct {
 type metal struct {
 	ID             int64      `json:"id"`
 	Type           string     `json:"type"`
+	Code           *string    `json:"code"`
 	Brand          string     `json:"brand"`
 	BoughtPrice    float64    `json:"bought_price"`
 	BuyPrice       float64    `json:"buy_price"`
@@ -176,7 +177,7 @@ func (a *API) me(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) listMetals(w http.ResponseWriter, r *http.Request) {
-	rows, err := a.db.Query(`SELECT id,type,brand,bought_price,buy_price,buyback_price,weight,price_updated_at,created_at,updated_at FROM precious_metals WHERE user_id=? ORDER BY updated_at DESC`, userID(r))
+	rows, err := a.db.Query(`SELECT id,type,code,brand,bought_price,buy_price,buyback_price,weight,price_updated_at,created_at,updated_at FROM precious_metals WHERE user_id=? ORDER BY updated_at DESC`, userID(r))
 	if err != nil {
 		fail(w, 500, "could not load metals")
 		return
@@ -210,7 +211,8 @@ func (a *API) createMetal(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, err.Error())
 		return
 	}
-	result, err := a.db.Exec(`INSERT INTO precious_metals(user_id,type,brand,bought_price,buy_price,buyback_price,weight,price_updated_at) VALUES(?,?,?,?,?,?,?,?)`, userID(r), strings.TrimSpace(m.Type), strings.TrimSpace(m.Brand), m.BoughtPrice, quote.BuyPrice, quote.BuybackPrice, m.Weight, quote.RetrievedAt)
+	code := nullableTrimmedString(m.Code)
+	result, err := a.db.Exec(`INSERT INTO precious_metals(user_id,type,code,brand,bought_price,buy_price,buyback_price,weight,price_updated_at) VALUES(?,?,?,?,?,?,?,?,?)`, userID(r), strings.TrimSpace(m.Type), code, strings.TrimSpace(m.Brand), m.BoughtPrice, quote.BuyPrice, quote.BuybackPrice, m.Weight, quote.RetrievedAt)
 	if err != nil {
 		fail(w, 500, "could not create precious metal")
 		return
@@ -229,7 +231,8 @@ func (a *API) updateMetal(w http.ResponseWriter, r *http.Request) {
 		fail(w, 502, err.Error())
 		return
 	}
-	result, err := a.db.Exec(`UPDATE precious_metals SET type=?,brand=?,bought_price=?,buy_price=?,buyback_price=?,weight=?,price_updated_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`, strings.TrimSpace(m.Type), strings.TrimSpace(m.Brand), m.BoughtPrice, quote.BuyPrice, quote.BuybackPrice, m.Weight, quote.RetrievedAt, r.PathValue("id"), userID(r))
+	code := nullableTrimmedString(m.Code)
+	result, err := a.db.Exec(`UPDATE precious_metals SET type=?,code=?,brand=?,bought_price=?,buy_price=?,buyback_price=?,weight=?,price_updated_at=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND user_id=?`, strings.TrimSpace(m.Type), code, strings.TrimSpace(m.Brand), m.BoughtPrice, quote.BuyPrice, quote.BuybackPrice, m.Weight, quote.RetrievedAt, r.PathValue("id"), userID(r))
 	if err != nil {
 		fail(w, 500, "could not update precious metal")
 		return
@@ -273,11 +276,11 @@ func (a *API) refreshPrice(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) findMetal(uid int64, id string) (metal, error) {
 	var m metal
-	err := scanMetal(a.db.QueryRow(`SELECT id,type,brand,bought_price,buy_price,buyback_price,weight,price_updated_at,created_at,updated_at FROM precious_metals WHERE id=? AND user_id=?`, id, uid).Scan, &m)
+	err := scanMetal(a.db.QueryRow(`SELECT id,type,code,brand,bought_price,buy_price,buyback_price,weight,price_updated_at,created_at,updated_at FROM precious_metals WHERE id=? AND user_id=?`, id, uid).Scan, &m)
 	return m, err
 }
 func scanMetal(scan func(...any) error, m *metal) error {
-	return scan(&m.ID, &m.Type, &m.Brand, &m.BoughtPrice, &m.BuyPrice, &m.BuybackPrice, &m.Weight, &m.PriceUpdatedAt, &m.CreatedAt, &m.UpdatedAt)
+	return scan(&m.ID, &m.Type, &m.Code, &m.Brand, &m.BoughtPrice, &m.BuyPrice, &m.BuybackPrice, &m.Weight, &m.PriceUpdatedAt, &m.CreatedAt, &m.UpdatedAt)
 }
 func validMetal(w http.ResponseWriter, m metal) bool {
 	if strings.TrimSpace(m.Type) == "" || strings.TrimSpace(m.Brand) == "" || m.BoughtPrice < 0 || m.BuyPrice < 0 || m.BuybackPrice < 0 || m.Weight <= 0 {
@@ -285,6 +288,16 @@ func validMetal(w http.ResponseWriter, m metal) bool {
 		return false
 	}
 	return true
+}
+func nullableTrimmedString(value *string) any {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		return nil
+	}
+	return trimmed
 }
 
 func (a *API) requireAuth(next http.Handler) http.Handler {

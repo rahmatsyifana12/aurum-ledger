@@ -46,4 +46,11 @@ func TestOpenMigratesNameColumnToType(t *testing.T) {
 	if metalType != "Gold" {
 		t.Fatalf("expected Gold, got %q", metalType)
 	}
+	var code sql.NullString
+	if err := migrated.QueryRow(`SELECT code FROM precious_metals WHERE id=1`).Scan(&code); err != nil {
+		t.Fatal(err)
+	}
+	if code.Valid {
+		t.Fatalf("expected migrated code to be null, got %q", code.String)
+	}
 }
