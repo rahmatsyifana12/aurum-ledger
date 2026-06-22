@@ -48,6 +48,24 @@ UBS_BUYBACK_PRICE_PATH=data.prices.buyback
 
 Creating or updating a holding retrieves its current prices from the configured provider. Unsupported brands or weights return an error rather than saving an incorrect price.
 
+## Scheduled price refresh
+
+The backend includes a CLI worker that refreshes every holding's brand prices daily at 10:00 in fixed `+07:00` time.
+
+Run it locally:
+
+```bash
+cd backend
+set -a; source .env; set +a
+go run ./cmd/price-refresher
+```
+
+Refresh once and exit, which is useful for cron or systemd timers:
+
+```bash
+go run ./cmd/price-refresher -once
+```
+
 ## Production deployment
 
 The following reference setup uses one Ubuntu server, systemd for the Go API, and Nginx for HTTPS, reverse proxying, and Vue static files. Replace `app.example.com` and `api.example.com` with your domains.
@@ -82,8 +100,10 @@ Build the Go binary on the server:
 ```bash
 cd /opt/aurum/backend
 CGO_ENABLED=1 go build -o aurum-api ./cmd/server
+CGO_ENABLED=1 go build -o aurum-price-refresher ./cmd/price-refresher
 sudo chown aurum:aurum aurum-api
-sudo chmod 755 aurum-api
+sudo chown aurum:aurum aurum-price-refresher
+sudo chmod 755 aurum-api aurum-price-refresher
 ```
 
 Create `/opt/aurum/backend/.env`:
@@ -134,6 +154,38 @@ curl http://127.0.0.1:8080/health
 ```
 
 Only Nginx needs access to port `8080`; do not expose that port publicly.
+
+Create `/etc/systemd/system/aurum-price-refresher.service`:
+
+```ini
+[Unit]
+Description=Aurum Ledger daily price refresher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=aurum
+Group=aurum
+WorkingDirectory=/opt/aurum/backend
+EnvironmentFile=/opt/aurum/backend/.env
+ExecStart=/opt/aurum/backend/aurum-price-refresher
+Restart=on-failure
+RestartSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Start the scheduled refresher:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now aurum-price-refresher
+sudo systemctl status aurum-price-refresher
+```
 
 ### 3. Deploy the frontend
 
